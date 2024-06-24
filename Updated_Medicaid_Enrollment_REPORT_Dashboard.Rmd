@@ -1,0 +1,1006 @@
+---
+title: "UPDATED MEDICAID  `r  format(Sys.Date() - lubridate::day(Sys.Date()), '%B %Y') ` ENROLLMENT REPORT"
+output: 
+  flexdashboard::flex_dashboard:
+    theme: 
+      version: 4
+      bootswatch: minty
+    orientation: rows
+    vertical_layout: fill
+    logo: DHHS_New_Logo.png
+    css: custom.css
+editor_options: 
+  chunk_output_type: console
+params:
+  START_FY: "2023-07-01"
+  END_FY: "2024-06-30"
+  YEAR: "2024"
+---
+
+```{r eval=FALSE, include=FALSE}
+NEED TO DO:  ADD RATE CELL
+```
+
+
+```{r RESOURCES, eval=FALSE, include=FALSE}
+
+# RESOURCES:
+  1. Shiny-like Interactivity in R plots without Shiny: plotly, crosstalk
+  https://www.youtube.com/watch?v=dltr9WNselI
+  2. https://plotly.com/r/time-series/
+
+    START_FY = "2023-07-01"
+  
+  start_FY = format(as.Date(START_FY), '%b %Y')
+  start_FY = format(as.Date("2023-07-01"), '%b %Y') 
+
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+# date: '`r   as.Date(format(Sys.Date(), "%Y-%m-01")) `'
+library(flexdashboard)
+library(tidyverse)
+library(RJDBC)
+library(readr)
+library(readxl)
+library(dplyr)
+library(tidyr)
+library(openxlsx)
+library(lubridate)
+library(shiny)
+library(DT)
+library(janitor)
+library(gt)
+library(plotly)
+library(trelliscopejs)
+library(scales)
+
+
+library(knitr)
+library(kableExtra)
+library(flexdashboard)
+library(WDI)
+library(crosstalk)
+library(ggthemes)
+library(lubridate)
+
+library(reticulate)
+
+
+```
+
+
+
+```{r connectionn, include=FALSE}
+
+#Initiate Exadata connection
+cn <- dbConnect(JDBC(driverClass="oracle.jdbc.OracleDriver",
+                classPath="C:/Oracle/sqldeveloper/jdbc/lib/ojdbc8.jar"),
+                "jdbc:oracle:thin:@//hhssl1.dts.utah.gov/hldwprod",
+                user = paste(read.table(file = "F:/DWLogin/Exadata.txt")[1,],"[hcfsharedtables]",sep = ""),
+                password =  read.table(file = "F:/DWLogin/Exadata.txt")[2,])
+               
+setwd("G:/Analytics Unit/Enrollment/medicaid-enrollment-dashboard")              
+
+
+```
+
+```{r check_install_packagae DOHExadataCx, include=FALSE}
+
+# Check with Michael Keith (michaelkeith@utah.gov) to see if the table `hcfsharedtables.enrollment_mco_internal_stg3_comb` has been refreshed. Wait for it to be refreshed before moving to Step 2.
+
+# check if package DOHExadataCx is installed.  This package needs to be installed for the main.py in the next chunk to run successfully
+
+#if(!require("DOHExadataCx"))
+  
+#system2('pip install -e "G:\\Analytics Unit\\DOHExadataCx\\."')
+
+```
+
+```{r  include=FALSE}
+
+#  This script updates the table HCFSHAREDTABLES.ENROLLMENT_DASHBOARD_BASE
+# Step 1: Check with Michael Keith (michaelkeith@utah.gov) to see if the table `hcfsharedtables.enrollment_mco_internal_stg3_comb` has been refreshed. Wait for it to be refreshed before moving to Step 2.
+# Step 2:
+# system2('python "G:\\Analytics Unit\\Enrollment\\medicaid-enrollment-dashboard\\enrollment_base_table\\main.py"')
+
+# # or
+# system('python "G:\\Analytics Unit\\Enrollment\\medicaid-enrollment-dashboard\\enrollment_base_table\\main.py"')
+
+```
+
+
+
+```{r read enrol comptetion rate sql files, include=FALSE}
+# query = source("enrollment_with_cases.sql", encoding = 'UTF-8')
+# read file directly
+
+df <- dbGetQuery(cn, statement = read_file('enrollment_with_cases.sql'))
+
+enrollment_with_cases = df
+
+```
+
+
+```{r}
+
+completion_rate = dbGetQuery(cn, statement = read_file('completion_rate.sql'))
+
+
+```
+
+
+```{r completion_rate}
+
+
+# ADD TAM (use adult) and CHIP (use child) rates 
+completion_rate = completion_rate %>% 
+  mutate_if(is.character, factor)
+
+TAM_rate = completion_rate %>% 
+  filter(AIDGROUP == "Adult") %>% droplevels()
+levels(TAM_rate$AIDGROUP) = "TAM"
+
+chip_rate = completion_rate %>% 
+  filter(AIDGROUP == "Child") %>% droplevels()
+#levels(chip_rate$AIDGROUP) = "CHIP"
+
+levels(chip_rate$AIDGROUP) = "Children's Health Insurance Program (CHIP)"
+
+completion_rate = rbind(completion_rate, TAM_rate, chip_rate) 
+
+```
+
+
+
+
+```{r enrollment_with_cases, include=FALSE}
+
+enrollment_with_cases = enrollment_with_cases %>% 
+  mutate_if(is.character, factor) %>% 
+  mutate(MEDELIGMONTH = as.Date(MEDELIGMONTH)) 
+
+# Change CHIP to "Children's Health Insurance Program (CHIP)"
+levels(enrollment_with_cases$AIDGROUP)[levels(enrollment_with_cases$AIDGROUP)=="CHIP"] <- "Children's Health Insurance Program (CHIP)"
+
+
+
+```
+
+
+
+CASES
+========================================================================
+
+```{r CASES, include=FALSE}
+
+# start FY
+#start_FY = format(as.Date("2023-07-01"), '%b %Y') 
+start_FY = format(as.Date(params$START_FY), '%b %Y') 
+current_month_FY = format(Sys.Date() - lubridate::day(Sys.Date()), '%b %Y')  
+#current_month_FY = zoo::as.yearmon(Sys.Date())    # current forecast month
+#current_month_FY =  zoo::as.yearmon(Sys.Date() - months(2))  # last forecast month
+
+
+# enrollment_with_cases
+enrollment_with_cases = enrollment_with_cases %>% 
+  mutate_if(is.character, factor) %>% 
+  mutate(MEDELIGMONTH = as.Date(MEDELIGMONTH))
+
+# CASES
+CASES = enrollment_with_cases %>% 
+  select(MEDELIGMONTH,  CASES, AIDGROUP,  AGEGROUP) %>% 
+  mutate_if(is.character, factor) %>% droplevels() 
+
+# FOR CASES, only use the TOTAL unique cases from the Total in AGEGROUP
+unique_cases = CASES %>% 
+  filter(AGEGROUP == "Total") %>% 
+  select(-AGEGROUP)
+
+unique_cases = unique_cases %>% 
+  rename(ENROLLMENT = CASES)
+
+# df = unique_cases
+
+```
+
+
+```{r FUNCTION CASES create_datatable}
+# df = unique_cases
+
+# FUNCTION
+create_cases_datatable = function(df, completion_rate){
+  
+  # step 0
+  
+  completion_rate_long = completion_rate %>%
+  select(-OBS) %>% 
+  tidyr::pivot_longer(cols = -AIDGROUP) %>% 
+  select(AIDGROUP, FACTOR = name, VALUE = value)
+
+  # step 1: ADD column FACTOR 
+  current_month = max(df$MEDELIGMONTH) 
+
+
+  df = df %>% 
+    mutate(FACTOR = case_when(MEDELIGMONTH == current_month                 ~ "FACTOR_1", 
+                            MEDELIGMONTH == current_month %m+% months(-1) ~ "FACTOR_2",
+                            MEDELIGMONTH == current_month %m+% months(-2) ~ "FACTOR_3", 
+                            MEDELIGMONTH == current_month %m+% months(-3) ~ "FACTOR_4",
+                            MEDELIGMONTH == current_month %m+% months(-4) ~ "FACTOR_5", 
+                            MEDELIGMONTH == current_month %m+% months(-5) ~ "FACTOR_6",
+                            MEDELIGMONTH == current_month %m+% months(-6) ~ "FACTOR_7", 
+                            MEDELIGMONTH == current_month %m+% months(-7) ~ "FACTOR_8",
+                            MEDELIGMONTH == current_month %m+% months(-8) ~ "FACTOR_9", 
+                            MEDELIGMONTH == current_month %m+% months(-9) ~ "FACTOR_10",
+                            MEDELIGMONTH == current_month %m+% months(-10) ~ "FACTOR_11", 
+                            MEDELIGMONTH == current_month %m+% months(-11) ~ "FACTOR_12",
+                            TRUE ~ "FACTOR_0"))
+  
+   # step 2: join with completion_rate_long to get Factor Value
+  df = df %>% left_join(completion_rate_long, by = c("AIDGROUP", "FACTOR" )) %>% 
+  # get factor value, 1 for Aidgroup with no factor and VALUE  for Aidgroups with factor
+  mutate(VALUE = ifelse(is.na(VALUE), 1, VALUE))  %>% 
+  mutate_if(is.character, factor) %>% unique()
+  
+  # step 3: now, DIVIDE ENROLLMENT column by VALUE column
+  df = df %>% 
+  
+  mutate(ENROLLMENT_adjusted = round(ENROLLMENT/VALUE))
+  
+
+  # PART 2: create df_long data, include=FALSE}
+  df_long = df %>% 
+        select(MEDELIGMONTH, AIDGROUP, ENROLLMENT = ENROLLMENT_adjusted) %>% mutate_if(is.character, factor)
+      
+  df_wide = df_long %>% 
+        pivot_wider(names_from = AIDGROUP, values_from = ENROLLMENT)
+      
+  ###########################################
+  # Turn date column to column names
+  df_data = t(df_wide) %>% data.frame()
+      
+      
+  # get column names
+  names(df_data) <- df_data[1,] 
+      
+  # remove first row
+  df_data <- df_data[-1,] 
+      
+      
+  # change column names to yearmonth format 
+  names(df_data) <- names(df_data)  %>% zoo::as.yearmon()
+      
+      
+  # change row names to column
+  df_data = df_data %>% 
+        mutate(PROGRAM_TYPE = row.names(df_data))  %>% 
+        select(PROGRAM_TYPE, everything())
+      
+  # remove row names          
+  rownames(df_data) = NULL
+      
+  # change to numeric
+  df_data = df_data %>% 
+    mutate_at(vars(-1), as.numeric) %>% tibble()
+  
+ # reverse column names to get most recent months first
+  df_data = df_data[,c(1,  ncol(df_data):2)]
+  
+  # return 2 data sets: 'df' for plotting purpose and  'df_data' for creating table
+  df_data = return(list(df = df, df_data = df_data))
+
+}
+
+# testing
+# cases_datatable = create_cases_datatable(df = unique_cases, completion_rate )
+# a = rev((data_frame[-c(1,2)]))
+# rev_data_frame <- data_frame[,c(1, 2, ncol(data_frame):3) ] 
+
+
+```
+
+
+```{r FUNCTION create_interactive_plot}
+#plot_data = cases_datatable
+# Function
+create_interactive_plot_cases = function(plot_data){
+  
+  # convert to long data
+  df_long = plot_data$df %>% 
+        select(MEDELIGMONTH, AIDGROUP, ENROLLMENT = ENROLLMENT_adjusted) %>% 
+        mutate_if(is.character, factor)  %>% ungroup()
+
+  # create environment
+  shared_data <- df_long %>%  SharedData$new()
+
+  p <- shared_data %>% 
+    plot_ly(x = ~MEDELIGMONTH, y = ~ENROLLMENT, type="scatter", 
+            mode="lines+marker", color= ~AIDGROUP,  hoverinfo = "text",
+            text = ~paste("AID GROUP: ", AIDGROUP,
+                        "<br> DATE: ", format(MEDELIGMONTH, "%Y %B"),
+                        "<br> MEMBER COUNT: ", 
+                      format(ENROLLMENT, big.mark = ",")))
+   return(list(plot = p, shared_data = shared_data))
+}
+
+```
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### INTERACTIVE GRAPH
+
+
+```{r CASES PLOT, echo=FALSE}
+
+
+# Get datatable
+cases_datatable = create_cases_datatable(df = unique_cases, completion_rate )  
+
+# Use plot function 
+plot_here = create_interactive_plot_cases(plot_data = cases_datatable)  
+
+# add layout
+cases_plot = plot_here$p %>%  layout(title = paste("CASES ENROLLMENT up to ",
+                            format(Sys.Date() %m+% months(-1), "%B-%Y")),
+       xaxis = list(title = ""),
+       yaxis = list(title = "ENROLLMENT"), showlegend = T)
+
+cases_plot
+
+```
+
+
+### DATA TABLE
+
+```{r CASES DT2}
+
+# Data  
+unique_cases_data = cases_datatable$df_data 
+
+# Start FY and current month
+
+start_FY = format(as.Date(params$START_FY), '%b %Y')  
+current_month_FY = format(Sys.Date() - lubridate::day(Sys.Date()), '%b %Y') 
+#current_month_FY =  zoo::as.yearmon(Sys.Date() - months(2))  # last forecast month
+
+
+
+# get average for current FY
+dt_unique_cases = unique_cases_data %>%
+  mutate(`SFY 24 Average YTD` = round(rowMeans(
+    select(unique_cases_data, all_of(start_FY):all_of(current_month_FY)),  na.rm = TRUE))) %>% 
+  mutate(LAST = ifelse(PROGRAM_TYPE != "Total", 0, 1)) %>% 
+  select(1, LAST, `SFY 24 Average YTD`, everything())
+
+#data_frame = dt_unique_cases 
+
+# Data Table
+dt_unique_cases2 = DT::datatable(dt_unique_cases,
+              rownames = TRUE, 
+              escape = TRUE, 
+              extensions = 'Buttons', 
+              options = list(
+                columnDefs = list(list(
+                  className = 'dt-right',
+                  #visible = FALSE, targets = c(2:200))), # hiding these columns
+                visible = FALSE, targets = c(2,300:ncol(dt_unique_cases)))), # hiding these columns except the last column  "SFY 24 Average YTD"
+                  dom = 'frtBip',
+                buttons = list(list(extend = 'excel',
+                                    filename =  paste('CASES Enrollment Data ', Sys.Date(), sep = "")),
+                               list(extend = 'csv',
+                                    filename= paste('CASES Enrollment Data ', Sys.Date(), sep = ""))),
+                pageLength = 20)) 
+
+dt_unique_cases2 %>% 
+  DT::formatCurrency(columns = names(dt_unique_cases2$x$data) %>% tail(-2),
+                     currency = "", interval = 3, mark = ",", digits = 0)  %>%
+  formatStyle('LAST', target = 'row',
+  backgroundColor = styleEqual(c(0, 1), c( "white", 'yellow'))) 
+
+
+```
+
+
+PERSONS
+=========================================================================
+
+
+
+```{r person data wrangling, include=FALSE}
+
+## PERSONS
+persons = enrollment_with_cases %>% 
+  select(MEDELIGMONTH,  ENROLLMENT, AIDGROUP,  AGEGROUP) %>% 
+  # remove both totals
+  filter(AGEGROUP != "Total", AIDGROUP != "Total") %>% 
+  mutate_if(is.character, factor) %>% droplevels() 
+
+# Get sum for AIDGROUPS that include Adult and Child
+persons2 = persons  %>%  
+  select(-AGEGROUP) %>% 
+  group_by(MEDELIGMONTH, AIDGROUP) %>% 
+  mutate(ENROLLMENT = sum(ENROLLMENT)) %>% 
+  unique()
+
+# ADD RATE, keep data up to last month
+last_month = as.Date(format(Sys.Date(), "%Y-%m-01")) - 1 
+persons2 = persons2 %>% 
+  filter(MEDELIGMONTH <= last_month) %>% 
+  mutate_if(is.character, factor) %>% 
+  mutate(MEDELIGMONTH = as.Date(MEDELIGMONTH), RATE = 1)
+
+
+# person_datatable = create_person_datatable(df = persons2, completion_rate )
+
+
+```
+
+
+```{r FUNCTION  PERSONS create_datatable, include=FALSE}
+#df = persons2
+# FUNCTION
+create_person_datatable = function(df, completion_rate){
+  
+  # step 0
+  
+  completion_rate_long = completion_rate %>%
+  select(-OBS) %>% 
+  tidyr::pivot_longer(cols = -AIDGROUP) %>% 
+  select(AIDGROUP, FACTOR = name, VALUE = value)
+
+  # step 1: ADD column FACTOR 
+  
+  current_month = max(df$MEDELIGMONTH) 
+
+
+  df = df %>% 
+  mutate(FACTOR = case_when(MEDELIGMONTH == current_month                 ~ "FACTOR_1", 
+                            MEDELIGMONTH == current_month %m+% months(-1) ~ "FACTOR_2",
+                            MEDELIGMONTH == current_month %m+% months(-2) ~ "FACTOR_3", 
+                            MEDELIGMONTH == current_month %m+% months(-3) ~ "FACTOR_4",
+                            MEDELIGMONTH == current_month %m+% months(-4) ~ "FACTOR_5", 
+                            MEDELIGMONTH == current_month %m+% months(-5) ~ "FACTOR_6",
+                            MEDELIGMONTH == current_month %m+% months(-6) ~ "FACTOR_7", 
+                            MEDELIGMONTH == current_month %m+% months(-7) ~ "FACTOR_8",
+                            MEDELIGMONTH == current_month %m+% months(-8) ~ "FACTOR_9", 
+                            MEDELIGMONTH == current_month %m+% months(-9) ~ "FACTOR_10",
+                            MEDELIGMONTH == current_month %m+% months(-10) ~ "FACTOR_11", 
+                            MEDELIGMONTH == current_month %m+% months(-11) ~ "FACTOR_12",
+                            TRUE ~ "FACTOR_0"))
+  
+  
+  # step 2: join with completion_rate_long to get Factor Value
+  df = df %>% left_join(completion_rate_long, by = c("AIDGROUP", "FACTOR" )) %>% 
+  # get factor value, 1 for Aidgroup with no factor and VALUE  for Aidgroups with factor
+  mutate(VALUE = ifelse(is.na(VALUE), 1, VALUE))  %>% 
+  mutate_if(is.character, factor) %>% unique() 
+  
+  # step 3: now, DIVIDE ENROLLMENT column by VALUE column
+  df = df %>% mutate(ENROLLMENT_adjusted = round(ENROLLMENT/VALUE))
+  
+
+  # PART 2: create PERSONS data, include=FALSE}
+  df_long = df %>% 
+        select(MEDELIGMONTH, AIDGROUP, ENROLLMENT = ENROLLMENT_adjusted) %>% 
+        mutate_if(is.character, factor)
+      
+  df_wide = df_long %>% 
+        pivot_wider(names_from = AIDGROUP, values_from = ENROLLMENT)
+      
+  ###########################################
+  # Turn date column to column names
+  df_data = t(df_wide) %>% data.frame()
+      
+      
+  # get column names
+  names(df_data) <- df_data[1,] 
+      
+  # remove first row
+  df_data <- df_data[-1,] 
+      
+   #  change column names to yearmonth format 
+  names(df_data) <- names(df_data)  %>% zoo::as.yearmon()
+  
+      
+  # change row names to column
+  df_data = df_data %>% 
+        mutate(PROGRAM_TYPE = row.names(df_data))  %>% 
+        select(PROGRAM_TYPE, everything())
+      
+  # remove row names
+  rownames(df_data) = NULL
+      
+  # change to numeric
+  df_data = df_data %>% 
+    mutate_at(vars(-1), as.numeric) %>% tibble()
+  
+  # Add Total Line
+  df_data = df_data %>%
+      janitor::adorn_totals("row") %>% tibble() 
+      
+  # Create df_long_new with Total
+  df_long_new = df_data %>% 
+    pivot_longer(names_to = "MEDELIGMONTH", values_to = "ENROLLMENT", cols = - PROGRAM_TYPE) %>% 
+    select(MEDELIGMONTH, AIDGROUP = PROGRAM_TYPE, ENROLLMENT )
+  
+  # change column names to yearmonth format 
+  #names(df_data)[-1] <- names(df_data)[-1]  %>% zoo::as.yearmon()
+      
+  # reverse column names to get most recent months first
+  df_data = df_data[,c(1,  ncol(df_data):2)]
+  
+  # return df_data
+  #df_list = return(list(df = df, df_long = df_long_new, df_data = df_data))
+  df_list = return(list(df = df, df_long = df_long_new,  df_data = df_data))
+
+}
+
+# person_datatable = create_person_datatable(df = persons2, completion_rate )
+```
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### INTERACTIVE GRAPH
+
+```{r FUNCTION PERSONS create_interactive_plot}
+# Function
+ 
+#plot_data = person_datatable
+
+create_interactive_plot = function(plot_data){
+  # convert to long data
+  
+  df_long = plot_data$df_long %>%  #plot_data$df_long %>%  
+                 ungroup() %>% 
+                 mutate(MEDELIGMONTH = zoo::as.yearmon(MEDELIGMONTH))
+    
+      
+  
+  # create environment
+  shared_data <- df_long %>%  SharedData$new()
+
+  p <- shared_data %>% 
+    plot_ly(x = ~MEDELIGMONTH, y = ~ENROLLMENT, type = "scatter", 
+            mode="lines+marker", color= ~AIDGROUP, 
+            hoverinfo = "text",
+            text = ~paste("AID GROUP: ", AIDGROUP,
+                        "<br> DATE: ",  MEDELIGMONTH,
+                         #"<br> DATE: ", format(MEDELIGMONTH, "%Y %B"),
+                        "<br> MEMBER COUNT: ", 
+                      format(ENROLLMENT, big.mark = ","))) 
+  
+   return(list(plot = p, shared_data = shared_data))
+}
+
+# END FUNCTION
+
+```
+
+```{r  PERSON PLOT with TOTAL, echo=FALSE}
+
+
+
+# Get datatable
+#person_datatable = create_cases_datatable(df = persons2, completion_rate )
+person_datatable = create_person_datatable(df = persons2, completion_rate )
+
+# Use plot function 
+person_plot_here = create_interactive_plot(plot_data = person_datatable)
+
+# add layout
+person_plot = person_plot_here$p %>%  
+  layout(title = paste("PERSONS ENROLLMENT up to ", 
+                            format(Sys.Date() %m+% months(-1), "%B-%Y")),
+       xaxis = list(title = ""),
+       yaxis = list(title = "ENROLLMENT"), showlegend = T) 
+
+person_plot
+
+
+```
+
+
+### DATA TABLE
+
+```{r  DT PERSON}
+
+ 
+# get person_data
+person_data = person_datatable$df_data #%>%  tibble()
+
+# Start and End FY
+#start_FY = "2023-07-01"
+#start_FY = format(as.Date("2023-07-01"), '%b %Y') 
+
+start_FY = format(as.Date(params$START_FY), '%b %Y') 
+current_month_FY  = format(Sys.Date() - lubridate::day(Sys.Date()), '%b %Y') 
+
+#names(person_data[ncol(person_data)])
+
+# ADD SFY 24 Average YTD
+dt_persons = person_data %>%
+  mutate(`SFY 24 Average YTD` = round(rowMeans(select(person_data,
+                                                      
+  # all_of(params$START_FY):all_of(current_month_FY)),  na.rm = TRUE))) %>% 
+  all_of(start_FY):all_of(current_month_FY)),  na.rm = TRUE))) %>% 
+  mutate(LAST = ifelse(PROGRAM_TYPE != "Total", 0, 1))  %>% dplyr::select(1, LAST, `SFY 24 Average YTD`, everything())
+
+
+######
+# dt_unique_cases = unique_cases_data %>%
+#   mutate(`SFY 24 Average YTD` = round(rowMeans(
+#     select(unique_cases_data, all_of(start_FY):all_of(current_month_FY)),  na.rm = TRUE))) %>% 
+#   mutate(LAST = ifelse(PROGRAM_TYPE != "Total", 0, 1)) %>% 
+#   select(1, LAST, `SFY 24 Average YTD`, everything())
+# 
+
+#####
+
+### FULL PERSONS DATA TABLE
+dt_persons2 = DT::datatable(dt_persons,
+              rownames = TRUE,
+              escape = TRUE,
+              extensions = 'Buttons',
+              options = list(
+                columnDefs = list(list(
+                  className = 'dt-right',
+                  visible = FALSE, targets = c(2,300:ncol(dt_persons)))), # hiding these columns
+                dom = 'frtBip',
+                buttons = list(list(extend = 'excel',
+                                    filename =  paste('PERSONS Enrollment Data ', Sys.Date(), sep = "")),
+                               list(extend = 'csv',
+                                    filename= paste('PERSONS Enrollment Data ', Sys.Date(), sep = ""))),
+                pageLength = 30))
+
+
+dt_persons2 %>% 
+  DT::formatCurrency(columns = names(dt_persons2$x$data) %>% tail(-2), currency = "", interval = 3, mark = ",", digits = 0)  %>%
+  formatStyle('LAST', target = 'row',
+  backgroundColor = styleEqual(c(0, 1), c( "white", 'yellow'))
+)
+
+
+```
+
+
+```{r Export to Excel for Mike, echo=FALSE}
+
+library(tidyverse)
+library(openxlsx)
+
+# Step 1:  Create a new Workbook
+ wbk  =  createWorkbook()
+
+# Step 2: Add Worksheet
+ addWorksheet(wb = wbk, sheetName = "Person")
+ 
+# Step 3: Write Data/Query
+ writeData(wb = wbk, sheet = "Person",  x = dt_persons,  rowNames = FALSE)
+
+# Step 4:  Save Workbook- Export to Excel
+saveWorkbook(wbk , "PERSONS Enrollment Data_latest.xlsx", overwrite = TRUE)
+
+#openXL(wbk) 
+
+```
+
+CHILDREN
+========================================================================
+
+
+```{r CHILD data wrangling, include=FALSE}
+
+
+## CHILD
+child = enrollment_with_cases %>% 
+  select(MEDELIGMONTH,  ENROLLMENT, AIDGROUP,  AGEGROUP) %>% 
+  # keep Child AGEGROUP 
+  filter(AGEGROUP == "Child") %>% 
+  # remove both totals
+  filter(AGEGROUP != "Total", AIDGROUP != "Total") %>% 
+  mutate_if(is.character, factor) %>% droplevels() 
+  
+# Get sum for AIDGROUPS that include Adult and Child
+child2 = child  %>%  
+  select(-AGEGROUP) %>% 
+  group_by(MEDELIGMONTH, AIDGROUP) %>% 
+  mutate(ENROLLMENT = sum(ENROLLMENT)) %>% 
+  unique()
+
+# ADD RATE, keep data up to last month
+last_month = as.Date(format(Sys.Date(), "%Y-%m-01")) - 1 
+child2 = child2 %>% 
+  filter(MEDELIGMONTH <= last_month) %>% 
+  mutate_if(is.character, factor) %>% 
+  mutate(MEDELIGMONTH = as.Date(MEDELIGMONTH), RATE = 1)
+
+
+
+```
+
+
+
+```{r child data, include=FALSE}
+### CHILD DATA TABLE
+child_datatable = create_person_datatable(df = child2, completion_rate )
+
+# ADD ROW TOTAL
+child_data = child_datatable$df_data %>% tibble()  
+
+# Start and End FY
+## # # start_FY = "2023-07-01" 
+start_FY = format(as.Date(params$START_FY), '%b %Y') 
+current_month_FY = format(Sys.Date() - lubridate::day(Sys.Date()), '%b %Y') 
+#current_month_FY =  zoo::as.yearmon(Sys.Date() - months(2))  # last forecast month
+
+#current_month_FY = names(person_data[ncol(child_data)])  
+
+ # ADD SFY 24 Average YTD
+dt_child = child_data %>%
+  mutate(`SFY 24 Average YTD` = round(rowMeans(select(child_data, 
+                                                all_of(start_FY):all_of(current_month_FY)),  na.rm = TRUE)))%>% 
+  mutate(LAST = ifelse(PROGRAM_TYPE != "Total", 0, 1)) %>% 
+  select(1, LAST, `SFY 24 Average YTD`, everything())
+
+```
+
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### INTERACTIVE GRAPH
+
+
+```{r echo=FALSE}
+child_plot_here  = create_interactive_plot(plot_data = child_datatable)
+
+child_plot = child_plot_here$p %>%  layout(title = paste("CHILDREN ENROLLMENT up to ", 
+                            format(Sys.Date() %m+% months(-1), "%B-%Y")),
+       xaxis = list(title = ""),
+       yaxis = list(title = "ENROLLMENT"), showlegend = T) 
+
+child_plot
+
+```
+
+
+### DATA TABLE
+
+```{r child full data table, echo=FALSE}
+
+### FULL CHILD DATA TABLE
+dt_child2 = DT::datatable(dt_child,
+              rownames = TRUE, 
+              escape = TRUE, 
+              extensions = 'Buttons', 
+              options = list(
+                columnDefs = list(list(
+                  className = 'dt-right',
+                  visible = FALSE, targets = c(2,300, ncol(dt_child)))), # hiding these columns
+                dom = 'frtBip',
+                buttons = list(list(extend = 'excel',
+                                    filename =  paste('CHILDREN Enrollment Data ', Sys.Date(), sep = "")),
+                               list(extend = 'csv',
+                                    filename= paste('CHILDREN Enrollment Data ', Sys.Date(), sep = ""))),
+                pageLength = 30)) 
+
+dt_child2 %>% 
+  DT::formatCurrency(columns = names(dt_child2$x$data) %>% tail(-2), currency = "", interval = 3, mark = ",", digits = 0)  %>%
+  formatStyle('LAST', target = 'row',
+  backgroundColor = styleEqual(c(0, 1), c( "white", 'yellow'))
+)
+
+
+```
+
+
+
+ADULTS
+========================================================================
+
+
+```{r ADULTS data wrangling, include=FALSE}
+
+## ADULTS
+adult = enrollment_with_cases %>% 
+  select(MEDELIGMONTH,  ENROLLMENT, AIDGROUP,  AGEGROUP) %>% 
+  # keep adult AGEGROUP 
+  filter(AGEGROUP == "Adult") %>% 
+  # remove both totals
+  filter(AGEGROUP != "Total", AIDGROUP != "Total") %>% 
+  mutate_if(is.character, factor) %>% droplevels() 
+  
+# Get sum for AIDGROUPS that include Adult and adult
+adult2 = adult  %>%  
+  select(-AGEGROUP) %>% 
+  group_by(MEDELIGMONTH, AIDGROUP) %>% 
+  mutate(ENROLLMENT = sum(ENROLLMENT)) %>% 
+  unique()
+
+# ADD RATE, keep data up to last month
+last_month = as.Date(format(Sys.Date(), "%Y-%m-01")) - 1 
+
+adult2 = adult2 %>% 
+  filter(MEDELIGMONTH <= last_month) %>% 
+  mutate_if(is.character, factor) %>% 
+  mutate(MEDELIGMONTH = as.Date(MEDELIGMONTH), RATE = 1)
+
+
+```
+
+
+
+
+Row {.tabset}
+-----------------------------------------------------------------------
+
+### INTERACTIVE GRAPH
+
+
+```{r echo=FALSE}
+
+# Get adult datatable
+adult_datatable = create_person_datatable(df = adult2, completion_rate )
+adult_plot_here = create_interactive_plot(plot_data = adult_datatable)
+
+
+# add layout
+adult_plot = adult_plot_here$p %>%  layout(title = paste("ADULT ENROLLMENT up to ", 
+                            format(Sys.Date() %m+% months(-1), "%B-%Y")),
+       xaxis = list(title = ""),
+       yaxis = list(title = "ENROLLMENT"), showlegend = T) 
+
+adult_plot
+
+
+```
+
+
+### DATA TABLE
+
+```{r  ADULT full data table}
+
+# ADD ROW TOTAL
+adult_data = adult_datatable$df_data
+
+# Start and End FY
+# # # start_FY = "2023-07-01" 
+start_FY = format(as.Date(params$START_FY), '%b %Y') 
+current_month_FY = format(Sys.Date() - lubridate::day(Sys.Date()), '%b %Y') 
+
+#current_month_FY =  zoo::as.yearmon(Sys.Date() - months(2))  # last forecast month
+
+#current_month_FY = names(person_data[ncol(adult_data)])  
+
+
+# ADD SFY 24 Average YTD
+dt_adult = adult_data %>%
+  mutate(`SFY 24 Average YTD` = round(rowMeans(select(adult_data, #all_of(params$START_FY):all_of(current_month_FY)),  na.rm = TRUE)))%>% 
+  all_of(start_FY):all_of(current_month_FY)),  na.rm = TRUE)))%>% 
+  mutate(LAST = ifelse(PROGRAM_TYPE != "Total", 0, 1)) %>% 
+  select(1, LAST, `SFY 24 Average YTD`, everything())
+
+dt_adult2  = DT::datatable(dt_adult,
+              rownames = TRUE, 
+              escape = TRUE, 
+              extensions = 'Buttons', 
+              options = list(
+                columnDefs = list(list(
+                  className = 'dt-right',
+                  visible = FALSE, targets = c(2,300:ncol(dt_adult)))), # hiding these columns
+                dom = 'frtBip',
+                buttons = list(list(extend = 'excel',
+                                    filename =  paste('ADULT Enrollment Data ', Sys.Date(), sep = "")),
+                               list(extend = 'csv',
+                                    filename= paste('ADULT Enrollment Data ', Sys.Date(), sep = ""))),
+                pageLength = 30))
+
+dt_adult2 %>% 
+  DT::formatCurrency(columns = names(dt_adult2$x$data) %>% tail(-2), currency = "", interval = 3, mark = ",", digits = 0)  %>%
+  formatStyle('LAST', target = 'row',
+  backgroundColor = styleEqual(c(0, 1), c( "white", 'yellow'))
+)
+
+
+
+```
+
+
+
+
+
+```{r NOTES, eval=FALSE, include=FALSE}
+
+## 01/04/2023
+
+  - Reverse the columns to show the most recent data first
+  
+
+
+## 02/01/2023
+
+NEED TO FIGURE OUT HOW TO ADD THE TOTAL LINE TO THE GRAPH
+
+### 01/24/2023
+
+Jeff: 
+
+  1. Is it possible to add a "total" graph to the persons, children and adult tabs?
+
+  2. I also think we will have some 'naming changes' to help with understanding, I will send those over once I hear back from our team.
+
+Kolbi Yount:
+  
+  3. One other thing, would you try 'switching out the logo'?  I would like the background to be transparent, so there is not a white box around the logo.  Try this one.
+
+### OLD NOTES BELOW
+
+Michelle needs this: "the totals for Medicaid that includes the cost sharing programs but excludes CHIP for October/November and
+also the individual total & case totals"
+
+Mike suggests that the dashboard show the graphics along with the table
+
+
+### 
+WILL CREATE A FUNCTION TO PROCESS CONVERSION RATE AND turn data to DATA TABLE- DONE
+
+### 12/21/2022
+Met with Mike.  Here is the to-do list
+
+1) Apply the completion rate to TAM (use Adults) and CHIP (use Child) - DONE
+2) For CASES, use total from the query not from the adjorn_total function() -  MODIFied FUNCTION to apply to CASES and ADULT, CHILD, PERSON, differently - DONE
+
+3) Download capability:  explore option to download all tabs all at once (i.e. CASES, PERSONS, CHILD, ADULTS) 
+
+4) Fix the Datatable Error/Warning messages - DONE
+
+
+5) Add Visualization - DONE
+
+
+6) Adjust Date in completion factors so that it will be automatic - DONE 
+
+7) NOTE:  USE ADULT Graph tab format 
+
+### 01/04/2023
+Things to do/fix
+0) # recalculate SFY 24 Average YTD Averages , automate it
+1) Remove the second Total line in CASES (DONE)
+2) Adjust the Graph to show bullet selection options (DONE but turned off in dashboard)
+3) Display all data on graph, show year label on x axis only, not month-year (DONE)
+
+
+
+### 01/06/2023
+Things to do/fix but not high PRIORITY
+4) From Previous Meeting: Download capability:  explore option to download all tabs all at once (i.e. CASES, PERSONS, CHILD, ADULTS) 
+
+# 01/10/2023 Kolbi's feedback
+
+This looks really great!  Such an improvement from past data reports.  
+
+ 1. My only feedback is identifying the enrollment report.  I suggest adding, "MEDICAID DECEMBER 2022 ENROLLMENT REPORT" DONE
+
+ 2. I also think we should add the DHHS logo on the top right header, inside the teal banner.  You can use the white logo (attached). DONE
+
+ 3. Finally, I would like to spell out CHIP in the key.  We reference it multiple times but it is never spelled out.  Can you please change it to: Children''s Health Insurance Program (CHIP) DONE
+
+01/12/2023
+
+  COMPLETED and PUBLISHED: https://medicaid.utah.gov/Documents/enrollment/DECEMBER%202022%20ENROLLMENT%20REPORT%20DASHBOARD.html#children
+
+01/13/2023
+  - Created GitLab Depository to start Version Control (DONE 01/13)
+
+  -  Need to create an automatic range selection for this all_of(start_FY):all_of(current_month_FY)) (DONE 01/14)
+
+
+
+
+```
+
